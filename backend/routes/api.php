@@ -18,6 +18,20 @@ use App\Http\Controllers\Api\AvailabilityController;
 use App\Http\Controllers\Api\QuotePricingPreviewController;
 use App\Http\Controllers\Api\QuoteController;
 use App\Http\Controllers\Api\ReservationController;
+use App\Http\Controllers\Api\OrderController;
+use App\Http\Controllers\Api\AssignmentController;
+use App\Http\Controllers\Api\IncidentController;
+use App\Http\Controllers\Api\RoomingController;
+use App\Http\Controllers\Api\MobileOperatorController;
+use App\Http\Controllers\Api\VoucherController;
+use App\Http\Controllers\Api\SupplierExtranetController;
+use App\Http\Controllers\Api\FinanceReceivableController;
+use App\Http\Controllers\Api\FinancePaymentController;
+use App\Http\Controllers\Api\FinancePayableController;
+use App\Http\Controllers\Api\FinanceInvoiceController;
+use App\Http\Controllers\Api\ChannelB2BController;
+use App\Http\Controllers\Api\ChannelEcomController;
+use App\Http\Controllers\Api\ChannelCMSController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', function () {
@@ -60,13 +74,43 @@ Route::prefix('v1')->group(function () {
         Route::post('/reservations/{code}/start-operation', [ReservationController::class, 'startOperation']);
         Route::post('/reservations/{code}/complete', [ReservationController::class, 'completeTrip']);
         Route::post('/reservations/{code}/cancel', [ReservationController::class, 'cancelReservation']);
-    
-    Route::get('/admin/users', function (\Illuminate\Http\Request $request) {
+
+        // 05. Módulo de Operaciones
+        Route::get('/ops/orders', [OrderController::class, 'index']);
+        Route::get('/ops/orders/kpis', [OrderController::class, 'kpis']);
+        Route::post('/ops/orders', [OrderController::class, 'store']);
+        Route::get('/ops/orders/{code}', [OrderController::class, 'show']);
+        Route::patch('/ops/order-tasks/{id}', [OrderController::class, 'toggleTask']);
+        Route::post('/ops/orders/{code}/close', [OrderController::class, 'close']);
+
+        Route::get('/ops/resources', [AssignmentController::class, 'getResources']);
+        Route::put('/ops/assignments/{id}/resources', [AssignmentController::class, 'assignResources']);
+        Route::post('/ops/assignments/{id}/confirm', [AssignmentController::class, 'confirm']);
+        Route::post('/ops/assignments/{id}/release', [AssignmentController::class, 'release']);
+
+        Route::get('/ops/incidents', [IncidentController::class, 'index']);
+        Route::post('/ops/incidents', [IncidentController::class, 'store']);
+        Route::post('/ops/incidents/{id}/resolve', [IncidentController::class, 'resolve']);  
+
+        // Vouchers (PROC-035)
+        Route::get('/ops/vouchers', [VoucherController::class, 'index']);
+        Route::post('/ops/vouchers', [VoucherController::class, 'store']);
+        Route::post('/ops/vouchers/{code}/redeem', [VoucherController::class, 'redeem']);
+        Route::post('/ops/vouchers/{code}/void', [VoucherController::class, 'voidVoucher']);
+        // 05. Móvil Operador & Offline Sync (PROC-056 / PROC-058)
+        Route::get('/mobile/operator/bootstrap', [MobileOperatorController::class, 'bootstrap']);
+        Route::post('/mobile/operator/actions', [MobileOperatorController::class, 'handleAction']);
+
+        Route::get('/admin/users', function (\Illuminate\Http\Request $request) {
             $tenantId = app('current_tenant_id');
             $users = \App\Models\User::where('tenant_id', $tenantId)
-                ->select('id', 'name', 'email', 'code', 'role', 'status', 'created_at')
+                ->select('id', 'name', 'email', 'code', 'status', 'created_at')
                 ->orderBy('name')
-                ->get();
+                ->get()
+                ->map(function ($u) {
+                    $u->role = ($u->code === 'U01') ? 'tenant_admin' : 'sales';
+                    return $u;
+                });
             return response()->json(['data' => $users]);
         });
         Route::get('/dashboard/sales', [SalesDashboardController::class, 'index']);
@@ -148,6 +192,80 @@ Route::prefix('v1')->group(function () {
                 Route::post('/holds', [AvailabilityController::class, 'storeHold']);
                 Route::post('/holds/{id}/confirm', [AvailabilityController::class, 'confirmHold']);
                 Route::post('/holds/{id}/release', [AvailabilityController::class, 'releaseHold']);
+            });
+
+            // 06. Extranet de Proveedores
+
+            Route::prefix('supplier')->group(function () {
+                Route::get('/me', [SupplierExtranetController::class, 'me']);
+                Route::get('/dashboard', [SupplierExtranetController::class, 'dashboard']);
+                Route::get('/requests', [SupplierExtranetController::class, 'requests']);
+                Route::post('/requests/{id}/confirm', [SupplierExtranetController::class, 'confirmRequest']);
+                Route::post('/requests/{id}/reject', [SupplierExtranetController::class, 'rejectRequest']);
+                Route::post('/requests/{id}/alternative', [SupplierExtranetController::class, 'proposeAlternative']);
+
+                Route::get('/rooming-lists', [SupplierExtranetController::class, 'roomingLists']);
+                Route::post('/rooming-lists/{id}/acknowledge', [SupplierExtranetController::class, 'acknowledgeRooming']);
+                Route::post('/rooming-lists/{id}/confirm', [SupplierExtranetController::class, 'confirmRooming']);
+                Route::post('/rooming-rooms/{id}/observations', [SupplierExtranetController::class, 'observeRoom']);
+
+                Route::get('/vouchers', [SupplierExtranetController::class, 'vouchers']);
+                Route::post('/vouchers/redeem', [SupplierExtranetController::class, 'redeemVoucher']);
+
+                Route::get('/payables', [SupplierExtranetController::class, 'payables']);
+                Route::post('/payables/{id}/invoices', [SupplierExtranetController::class, 'uploadInvoice']);
+
+                Route::get('/incidents', [SupplierExtranetController::class, 'incidents']);
+                Route::post('/incidents', [SupplierExtranetController::class, 'reportIncident']);
+
+                Route::get('/contract', [SupplierExtranetController::class, 'contract']);
+                Route::post('/rate-requests', [SupplierExtranetController::class, 'requestRateUpdate']);
+            });
+
+            // 07. Finanzas, Tesorería y Facturación
+            Route::prefix('finance')->group(function () {
+                // CxC e Inbound
+                Route::get('/receivables', [FinanceReceivableController::class, 'index']);
+                Route::get('/receivables/summary', [FinanceReceivableController::class, 'summary']);
+                Route::post('/receivables/advances', [FinanceReceivableController::class, 'requestAdvance']);
+                Route::post('/receivables/{code}/reminders', [FinanceReceivableController::class, 'sendReminder']);
+
+                // Pagos y Aplicación
+                Route::get('/payments', [FinancePaymentController::class, 'index']);
+                Route::post('/payments', [FinancePaymentController::class, 'store']);
+                Route::post('/payments/{code}/revert', [FinancePaymentController::class, 'revert']);
+
+                // CxP, Costos y Outbound
+                Route::get('/payables', [FinancePayableController::class, 'index']);
+                Route::post('/costs', [FinancePayableController::class, 'storeCost']);
+                Route::post('/payables/{code}/approve', [FinancePayableController::class, 'approve']);
+                Route::post('/payables/{code}/schedule', [FinancePayableController::class, 'schedule']);
+                Route::post('/payables/{code}/payouts', [FinancePayableController::class, 'payout']);
+
+                // Facturación SUNAT
+                Route::get('/invoices', [FinanceInvoiceController::class, 'index']);
+                Route::post('/invoices', [FinanceInvoiceController::class, 'store']);
+            });
+
+                // 08. Canales y Portales
+            Route::prefix('channels')->group(function () {
+                // B2B
+                Route::get('/b2b/summary', [ChannelB2BController::class, 'summary']);
+                Route::get('/b2b/agencies', [ChannelB2BController::class, 'agencies']);
+                Route::post('/b2b/agencies', [ChannelB2BController::class, 'storeAgency']);
+                Route::post('/b2b/agencies/{id}/block', [ChannelB2BController::class, 'blockAgency']);
+                Route::post('/b2b/agencies/{id}/unblock', [ChannelB2BController::class, 'unblockAgency']);
+                Route::get('/b2b/price-lists', [ChannelB2BController::class, 'priceLists']);
+
+                // E-commerce Gestión
+                Route::get('/ecommerce/summary', [ChannelEcomController::class, 'summary']);
+                Route::get('/ecommerce/orders', [ChannelEcomController::class, 'orders']);
+                Route::post('/ecommerce/orders/{code}/cancel', [ChannelEcomController::class, 'cancelOrder']);
+
+                // CMS
+                Route::get('/cms/contents', [ChannelCMSController::class, 'index']);
+                Route::post('/cms/contents', [ChannelCMSController::class, 'store']);
+                Route::post('/cms/contents/{id}/publish', [ChannelCMSController::class, 'publish']);
             });
     });
 });
